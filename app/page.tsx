@@ -25,6 +25,7 @@ interface ResearchResponse {
     url: string;
   }>;
   podcast_script: any[];
+  parsedScript: any[];
   error?: string;
 }
 
@@ -98,23 +99,41 @@ export default function ResearchPodcast() {
 
   const handleGenerateElevenLabsPodcast = async () => {
     setLoading(true);
-    setPodcastScript("");
-    setSearchResults([]);
-
+    setError("");
+    setPodcastAudio("");
+    
     try {
       const response = await fetch(`/api/elevenlabs`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(podScript),
+        body: JSON.stringify({ script: podScript }),
       });
 
+      if (!response.ok) {
+        throw new Error(`Failed to generate audio: ${response.statusText}`);
+      }
+
       const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
+      const audioFile = new Blob([audioBlob], { type: 'audio/mpeg' });
+      const audioUrl = URL.createObjectURL(audioFile);
+      
+      if (podcastAudio) {
+        URL.revokeObjectURL(podcastAudio);
+      }
+      
       setPodcastAudio(audioUrl);
+      
+      setIsPlaying(false);
+      setCurrentTime(0);
+      
+      if (audioRef.current) {
+        audioRef.current.load();
+      }
     } catch (error) {
       console.error("Error:", error);
+      setError(error instanceof Error ? error.message : "Failed to generate audio");
     } finally {
       setLoading(false);
     }
@@ -157,18 +176,27 @@ export default function ResearchPodcast() {
           selectedTopic
         )}&prompt=${encodeURIComponent(prompt)}`
       );
-      const data: ResearchResponse = await response.json();
-
+      
       if (!response.ok) {
-        throw new Error(data.error || "Failed to fetch research");
+        const errorText = await response.text();
+        throw new Error(`API error (${response.status}): ${errorText}`);
       }
 
-      const formattedScript = JSON.stringify(data, null, 2);
-      setPodcastScript(formattedScript);
-      setPodScript(data.podcast_script);
-      setSearchResults(data?.brave_search_results);
+      const data: ResearchResponse = await response.json();
+
+      if (!data || typeof data !== 'object') {
+        throw new Error('Invalid response format from API');
+      }
+
+      setPodcastScript(JSON.stringify(data, null, 2));
+      setPodScript(data.parsedScript || []);
+      setSearchResults(data.brave_search_results || []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      console.error('Podcast generation error:', err);
+      setError(err instanceof Error ? 
+        `Failed to generate podcast: ${err.message}` : 
+        "An unexpected error occurred while generating the podcast"
+      );
     } finally {
       setLoading(false);
     }
@@ -304,21 +332,8 @@ export default function ResearchPodcast() {
             <LoadingSkeleton />
           ) : (
             <>
-              {podcastScript && (
-                <>
-                  <Button
-                    className="flex justify-center"
-                    onClick={handleGenerateElevenLabsPodcast}
-                  >
-                    Generate Podcast
-                  </Button>
-                  <div className="whitespace-pre-wrap mt-5">
-                    <CodeBlock code={podcastScript} />
-                  </div>
-                </>
-              )}
 
-              {podcastAudio && (
+{podcastAudio && podcastAudio !== "" && (
                 <Card className="p-6 bg-gray-900 border-gray-500 w-full max-w-2xl mt-10">
                   <div className="flex items-center gap-4">
                     <Button
@@ -346,12 +361,46 @@ export default function ResearchPodcast() {
                         <span>{formatTime(duration)}</span>
                       </div>
                     </div>
-                    <a href={podcastAudio} download="generated_audio.mp3">
+                    <a 
+                      href={podcastAudio} 
+                      download="generated_audio.mp3"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        const link = document.createElement('a');
+                        link.href = podcastAudio;
+                        link.download = 'generated_audio.mp3';
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      }}
+                    >
                       <Download className="h-5 w-5 text-white" />
                     </a>
                   </div>
-                  <audio ref={audioRef} src={podcastAudio} />
+                  <audio 
+                    ref={audioRef} 
+                    src={podcastAudio}
+                    preload="auto"
+                    onError={(e) => {
+                      console.error("Audio playback error:", e);
+                      setError("Failed to play audio. Please try downloading instead.");
+                    }}
+                  />
                 </Card>
+              )}
+
+              {podcastScript && (
+                <>
+                  <Button
+                    className="flex justify-center mt-5"
+                    onClick={handleGenerateElevenLabsPodcast}
+                  >
+                    Generate Podcast
+                  </Button>
+                  <div className="whitespace-pre-wrap mt-5">
+                    <CodeBlock code={podcastScript} />
+                  </div>
+                </>
               )}
 
               {searchResults?.length > 0 && (

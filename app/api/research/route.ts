@@ -343,6 +343,60 @@ const generateScript = async (context: any, outline: any) => {
   `;
 };
 
+
+type DialogueEntry = {
+  id: number;
+  text: string;
+};
+
+function parseScriptToJSON(script: string): DialogueEntry[] {
+  if (!script || typeof script !== 'string') {
+    return [];
+  }
+
+  const result: DialogueEntry[] = [];
+  let currentId = 1;
+
+  try {
+    // Split by newlines and clean up
+    const lines = script.split("\n")
+      .map(line => line.trim())
+      .filter(line => line !== "")
+      // Instead of filtering out lines that start with sections,
+      // remove the section prefix if it exists
+      .map(line => line.replace(/^(INTRODUCTION|MAIN CONTENT|CONCLUSION):\s*/i, ''));
+
+    for (const line of lines) {
+      // Try to match speaker pattern with more flexible regex
+      const speakerMatch = line.match(/<Speaker\s*(\d+)>:?\s*(.*?)$/i);
+      
+      if (speakerMatch) {
+        const [_, speakerId, text] = speakerMatch;
+        
+        // Clean the text content
+        const cleanText = text
+          .trim()
+          .replace(/<[^>]*>/g, '') // Remove all HTML-like tags
+          .replace(/\s+/g, ' ')    // Normalize whitespace
+          .trim();
+
+        if (cleanText) {
+          result.push({
+            id: parseInt(speakerId) || currentId++,
+            text: cleanText
+          });
+        }
+      }
+    }
+
+    return result;
+  } catch (error) {
+    console.error('Error parsing script:', error);
+    return [];
+  }
+}
+
+
 export async function GET(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("q");
@@ -377,11 +431,13 @@ export async function GET(request: Request): Promise<Response> {
     console.log("GENERATING SCRIPT NOW");
     // }
     const podcastScript = await generateScript(context, jsonParsedOutline);
+    const parsedScript = parseScriptToJSON(podcastScript);
 
     return NextResponse.json({
       // searchResults,
       outline: jsonParsedOutline,
       script: podcastScript,
+      parsedScript: parsedScript
     });
   } catch (error: any) {
     console.error("Script Generation Error:", error);
